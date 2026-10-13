@@ -86,6 +86,18 @@ vsfm.VobSub(clip clip, string file)
 - `accurate`: set to `1` for accurate 10/16-bit rendering (slower), or `0`
   for the default mode.
 
+The VapourSynth interface targets the API 4 (R55 and newer, required since
+R80); the namespace `vsfm`, the functions and their arguments are unchanged.
+A wheel for Windows x64 is attached to the GitHub releases:
+
+```text
+pip install vapoursynth_vsfiltermod-<version>-py3-none-win_amd64.whl
+```
+
+It puts `VSFilterMod.dll` into `site-packages/vapoursynth/plugins`, where
+VapourSynth autoloads it. `tests/test_vsfiltermod.py` checks the formats, the
+Vmoe tags and the errors against an installed wheel or a given DLL.
+
 ## MPC-BE
 
 1. Register the matching DLL with `regsvr32.exe VSFilterMod.dll` using an

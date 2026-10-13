@@ -856,8 +856,17 @@ extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScri
 #include <emmintrin.h>
 
 namespace VapourSynth {
-#include <VapourSynth.h>
-#include <VSHelper.h>
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
+
+    // The formats the filter renders onto: YUV 4:2:0 with 8, 10 or 16 bit, RGB24.
+    static bool isYUV420(const VSVideoFormat& f, int bits) {
+        return f.colorFamily == cfYUV && f.sampleType == stInteger && f.bitsPerSample == bits && f.subSamplingW == 1 && f.subSamplingH == 1;
+    }
+
+    static bool isRGB24(const VSVideoFormat& f) {
+        return f.colorFamily == cfRGB && f.sampleType == stInteger && f.bitsPerSample == 8;
+    }
 
     class CTextSubVapourSynthFilter : public CTextSubFilter {
     public:
@@ -874,7 +883,7 @@ namespace VapourSynth {
     };
 
     struct VSFilterData {
-        VSNodeRef* node;
+        VSNode* node;
         const VSVideoInfo * vi;
         float fps;
         VFRTranslator * vfr;
@@ -882,11 +891,6 @@ namespace VapourSynth {
         CVobSubVapourSynthFilter * vobsub;
         bool accurate16bit;
     };
-
-    static void VS_CC vsfilterInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
-        VSFilterData * d = static_cast<VSFilterData *>(*instanceData);
-        vsapi->setVideoInfo(d->vi, 1, node);
-    }
 
     class VSFFrameBuf
     {
@@ -899,7 +903,7 @@ namespace VapourSynth {
 
     public:
         virtual ~VSFFrameBuf() {}
-        virtual void WriteTo(VSFrameRef* frame) = 0;
+        virtual void WriteTo(VSFrame* frame) = 0;
         SubPicDesc subpic;
         SubPicDesc subpic2;
 
@@ -1018,7 +1022,7 @@ namespace VapourSynth {
                 free(Buffer);
         }
 
-        VSFYUVBuf(const VSAPI* api, VSCore *core, const VSFilterData* d, const VSFrameRef* frame)
+        VSFYUVBuf(const VSAPI* api, VSCore *core, const VSFilterData* d, const VSFrame* frame)
             : api(api), d(d)
         {
             int totalSize = 0;
@@ -1097,7 +1101,7 @@ namespace VapourSynth {
             }
         }
 
-        void WriteTo(VSFrameRef* frame) override
+        void WriteTo(VSFrame* frame) override
         {
             if (BITDEPTH <= 8)
             {
@@ -1152,7 +1156,7 @@ namespace VapourSynth {
         {
         }
 
-        VSFRGBBuf(const VSAPI* api, VSCore *core, const VSFilterData* d, const VSFrameRef* frame)
+        VSFRGBBuf(const VSAPI* api, VSCore *core, const VSFilterData* d, const VSFrame* frame)
             : api(api), d(d)
         {
             buffer = std::make_unique<uint8_t[]>(d->vi->width * d->vi->height * 4);
@@ -1188,7 +1192,7 @@ namespace VapourSynth {
             subpic.type = MSP_RGB32;
         }
 
-        void WriteTo(VSFrameRef* frame) override
+        void WriteTo(VSFrame* frame) override
         {
             const int tmpStride = d->vi->width * 4;
             const int dstStride = api->getStride(frame, 0);
@@ -1214,28 +1218,28 @@ namespace VapourSynth {
         }
     };
 
-    static const VSFrameRef *VS_CC vsfilterGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-        const VSFilterData * d = static_cast<const VSFilterData *>(*instanceData);
+    static const VSFrame *VS_CC vsfilterGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+        const VSFilterData * d = static_cast<const VSFilterData *>(instanceData);
 
         if (activationReason == arInitial) {
             vsapi->requestFrameFilter(n, d->node, frameCtx);
         } else if (activationReason == arAllFramesReady) {
-            const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
-            VSFrameRef * dst = vsapi->copyFrame(src, core);
+            const VSFrame * src = vsapi->getFrameFilter(n, d->node, frameCtx);
+            VSFrame * dst = vsapi->copyFrame(src, core);
 
             std::unique_ptr<VSFFrameBuf> frameBuf;
 
-            if (d->vi->format->colorFamily == cmRGB)
+            if (d->vi->format.colorFamily == cfRGB)
             {
                 frameBuf.reset(new VSFRGBBuf(vsapi, core, d, src));
             }
-            else if (d->vi->format->colorFamily == cmYUV)
+            else if (d->vi->format.colorFamily == cfYUV)
             {
-                if (d->vi->format->id == pfYUV420P8)
+                if (isYUV420(d->vi->format, 8))
                     frameBuf.reset(new VSFYUVBuf<8>(vsapi, core, d, src));
-                else if (d->vi->format->id == pfYUV420P10)
+                else if (isYUV420(d->vi->format, 10))
                     frameBuf.reset(new VSFYUVBuf<10>(vsapi, core, d, src));
-                else if (d->vi->format->id == pfYUV420P16)
+                else if (isYUV420(d->vi->format, 16))
                     frameBuf.reset(new VSFYUVBuf<16>(vsapi, core, d, src));
             }
 
@@ -1289,17 +1293,17 @@ namespace VapourSynth {
 
         const ::std::string filterName{ static_cast<const char *>(userData) };
 
-        d.node = vsapi->propGetNode(in, "clip", 0, nullptr);
+        d.node = vsapi->mapGetNode(in, "clip", 0, nullptr);
         d.vi = vsapi->getVideoInfo(d.node);
 
-        if (!isConstantFormat(d.vi) || (d.vi->format->id != pfYUV420P8 && d.vi->format->id != pfRGB24 
-            && d.vi->format->id != pfYUV420P10 && d.vi->format->id != pfYUV420P16)) {
-            vsapi->setError(out, (filterName + ": only constant format YUV420P8, YUV420P10, YUV420P16 and RGB24 input supported").c_str());
+        if (!vsh::isConstantVideoFormat(d.vi) || (!isYUV420(d.vi->format, 8) && !isRGB24(d.vi->format)
+            && !isYUV420(d.vi->format, 10) && !isYUV420(d.vi->format, 16))) {
+            vsapi->mapSetError(out, (filterName + ": only constant format YUV420P8, YUV420P10, YUV420P16 and RGB24 input supported").c_str());
             vsapi->freeNode(d.node);
             return;
         }
 
-        const char* _file = vsapi->propGetData(in, "file", 0, nullptr);
+        const char* _file = vsapi->mapGetData(in, "file", 0, nullptr);
         int size = MultiByteToWideChar(CP_UTF8, 0, _file, -1, nullptr, 0);
         wchar_t* file = new wchar_t[size];
         MultiByteToWideChar(CP_UTF8, 0, _file, -1, file, size);
@@ -1311,21 +1315,21 @@ namespace VapourSynth {
             MultiByteToWideChar(CP_ACP, 0, _file, -1, file, size);
         }
 
-        int charset = int64ToIntS(vsapi->propGetInt(in, "charset", 0, &err));
+        int charset = vsh::int64ToIntS(vsapi->mapGetInt(in, "charset", 0, &err));
         if (err)
             charset = DEFAULT_CHARSET;
 
-        float fps = static_cast<float>(vsapi->propGetFloat(in, "fps", 0, &err));
+        float fps = static_cast<float>(vsapi->mapGetFloat(in, "fps", 0, &err));
         if (err)
             fps = -1.f;
         d.fps = (fps > 0.f || !d.vi->fpsNum) ? fps : static_cast<float>(d.vi->fpsNum) / d.vi->fpsDen;
 
-        const char * vfr = vsapi->propGetData(in, "vfr", 0, &err);
+        const char * vfr = vsapi->mapGetData(in, "vfr", 0, &err);
         if (!err)
             d.vfr = GetVFRTranslator(vfr);
 
         if (!d.vi->fpsNum && fps <= 0.f && !d.vfr) {
-            vsapi->setError(out, (filterName + ": variable framerate clip must have fps or vfr specified").c_str());
+            vsapi->mapSetError(out, (filterName + ": variable framerate clip must have fps or vfr specified").c_str());
             vsapi->freeNode(d.node);
             return;
         }
@@ -1335,38 +1339,42 @@ namespace VapourSynth {
         else
             d.vobsub = new CVobSubVapourSynthFilter { file, &err };
         if (err) {
-            vsapi->setError(out, (filterName + ": can't open " + _file).c_str());
+            vsapi->mapSetError(out, (filterName + ": can't open " + _file).c_str());
             vsapi->freeNode(d.node);
             delete d.textsub;
             delete d.vobsub;
             return;
         }
 
-        d.accurate16bit = vsapi->propGetInt(in, "accurate", 0, &err) != 0;
+        d.accurate16bit = vsapi->mapGetInt(in, "accurate", 0, &err) != 0;
         if (err)
             d.accurate16bit = false;
 
-        vsapi->createFilter(in, out, static_cast<const char *>(userData), vsfilterInit, vsfilterGetFrame, vsfilterFree, fmParallelRequests, 0, ud.release(), core);
+        VSFilterDependency deps[] = { { d.node, rpStrictSpatial } };
+        const VSVideoInfo * vi = d.vi;
+        vsapi->createVideoFilter(out, static_cast<const char *>(userData), vi, vsfilterGetFrame, vsfilterFree, fmParallelRequests, deps, 1, ud.release(), core);
         delete[] file;
     }
 
     //////////////////////////////////////////
     // Init
 
-    VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
-        configFunc("com.holywu.vsfiltermod", "vsfm", "VSFilterMod", VAPOURSYNTH_API_VERSION, 1, plugin);
-        registerFunc("TextSubMod",
-                     "clip:clip;"
+    VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
+        vspapi->configPlugin("com.holywu.vsfiltermod", "vsfm", "VSFilterMod", VS_MAKE_VERSION(5, 4), VAPOURSYNTH_API_VERSION, 0, plugin);
+        vspapi->registerFunction("TextSubMod",
+                     "clip:vnode;"
                      "file:data;"
                      "charset:int:opt;"
                      "fps:float:opt;"
                      "vfr:data:opt;"
                      "accurate:int:opt;",
+                     "clip:vnode;",
                      vsfilterCreate, const_cast<char *>("TextSubMod"), plugin);
-        registerFunc("VobSub",
-                     "clip:clip;"
+        vspapi->registerFunction("VobSub",
+                     "clip:vnode;"
                      "file:data;"
                      "accurate:int:opt;",
+                     "clip:vnode;",
                      vsfilterCreate, const_cast<char *>("VobSub"), plugin);
     }
 }

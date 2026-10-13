@@ -1,0 +1,19 @@
+[build-system]
+requires = ['hatchling>=1.24']
+build-backend = 'hatchling.build'
+
+[project]
+name = 'vapoursynth-vsfiltermod'
+version = '5.4.0'
+description = 'VSFilterMod subtitle renderer for VapourSynth (API 4), Windows x64'
+readme = 'README.md'
+requires-python = '>=3.8'
+license = { file = 'LICENSE' }
+dependencies = ['VapourSynth']
+
+# MSBuild builds the DLL first (see .github/workflows/build-wheels.yml); the wheel only carries it.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+'bin/x64/VSFilter/Release (MOD)/VSFilterMod.dll' = 'vapoursynth/plugins/VSFilterMod.dll'

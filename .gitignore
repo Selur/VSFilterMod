@@ -430,3 +430,8 @@ x64/
 Win32/
 dist/
 build/
+
+# Wheels
+dist/
+wheelhouse/
+__pycache__/
